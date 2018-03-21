@@ -1,0 +1,157 @@
+#!/usr/bin/env python
+import argparse, sys, os, time
+from subprocess import call
+from multiprocessing import cpu_count
+
+def main():
+	args = do_inputs()
+	tempdir = setup_tempdir(args.tempdir)
+	udir = os.path.dirname(os.path.realpath(__file__)) + "/../utilities"
+	sys.stdout.write("<<Welcome to use IsoSeqATS>>\n\n### Start IsoSeqATS running at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n\n")
+	
+	sys.stdout.write("## Step1: convert GTF to GPD, then sort at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.write("# Convert GTF to GPD\n")
+	sys.stdout.flush()
+	cmd1 = udir + "/py_isoseqcon_gtf2gpd.py -p yes -i " + args.annotation + " -o " + tempdir + "/isoform_annotation.gpd"
+	call(cmd1.split())
+	sys.stdout.write("# Sort GPD\n")
+	sys.stdout.flush()
+	cmd1s = "sort -k3,3 -k5,5n -k6,6n " + tempdir + "/isoform_annotation.gpd >" + tempdir + "/isoform_annotation.sort.gpd"
+	os.system(cmd1s)
+	sys.stdout.write("# Extract last exon information (TXT)\n")
+	sys.stdout.flush()
+	cmd1_le = udir + "/py_isoseqcon_extract_last_exon.py -i " + tempdir + "/isoform_annotation.gpd" + " -o " + tempdir + "/isoform_annotation_last_exon.txt"
+	call(cmd1_le.split())
+	sys.stdout.write("# Sort TXT\n")
+	sys.stdout.flush()
+	cmd1_les = "sort -k3,3 -k4,4 -k5,5n -k6,6n " + tempdir + "/isoform_annotation_last_exon.txt >" + tempdir + "/isoform_annotation_last_exon.sort.txt"
+	os.system(cmd1_les)
+	sys.stdout.write("\n## Step2: convert SAM to GPD (PacBio Iso-Seq long read) at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.flush()
+	cmd2 = udir + "/py_isoseqcon_sam2gpd_pacbio.py -i " + " ".join(args.long_read) + " -c " + args.primer_info + " -o " + tempdir + "/long_read.gpd" + " -p " + str(args.cpu)
+	call(cmd2.split())
+	if args.short_read:
+		sys.stdout.write("\n## Step2 (optional): convert SAM to GPD (SGS RNA-Seq short read) at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+		sys.stdout.flush()
+		cmd_opt = udir + "/py_isoseqcon_sam2gpd_sgs.py -i " + " ".join(args.short_read) + " -o " + tempdir + "/short_read.gpd" + " -p " + str(args.cpu)
+		call(cmd_opt.split())
+	sys.stdout.write("\n## Step3: long read alignment quality control and correction at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.flush()
+	if args.short_read:
+		cmd3 = udir + "/py_isoseqcon_polish.py -t " + args.st + " -5 " + args.s5 + " -3 " + args.s3 + " -m " + args.mapq + " -p " + str(args.cpu) + " -a " + tempdir + "/isoform_annotation.sort.gpd " + tempdir + "/short_read.gpd" + " -i " + tempdir + "/long_read.gpd" + " -o " + tempdir + "/polished_long_read.gpd"
+	else:
+		cmd3 = udir + "/py_isoseqcon_polish.py -t " + args.st + " -5 " + args.s5 + " -3 " + args.s3 + " -m " + args.mapq + " -p " + str(args.cpu) + " -a " + tempdir + "/isoform_annotation.sort.gpd" + " -i " + tempdir + "/long_read.gpd" + " -o " + tempdir + "/polished_long_read.gpd"
+	call(cmd3.split())
+	sys.stdout.write("\n## Step4: merge annotated isoforms and corrected long reads, then sort at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.flush()
+	cmd4c = "cat " + tempdir + "/isoform_annotation.sort.gpd " + tempdir + "/polished_long_read.gpd >" + tempdir + "/isoform_annotation_plus_long_read.gpd"
+	os.system(cmd4c)
+	cmd4s = "sort -k3,3 -k4,4 -k5,5n -k6,6n " + tempdir + "/isoform_annotation_plus_long_read.gpd >" + tempdir + "/isoform_annotation_plus_long_read.sort.gpd"
+	os.system(cmd4s)
+	sys.stdout.write("\n## Step5: concatenate annotated isoforms and corrected long reads at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.flush()
+	sys.stdout.write("# Singleton isoform\n")
+	sys.stdout.flush()
+	cmd5sgt = udir + "/py_isoseqcon_concat_sgt.py -p " + args.sgt_pct + " -i " + tempdir + "/isoform_annotation_plus_long_read.sort.gpd" + " -o " + tempdir + "/singleton_isoform.concat.gpd"
+	call(cmd5sgt.split())
+	sys.stdout.write("# Multi-exon isoform\n")
+	sys.stdout.flush()
+	cmd5mlt = udir + "/py_isoseqcon_concat_mlt.py" + " -i " + tempdir + "/isoform_annotation_plus_long_read.sort.gpd" + " -o " + tempdir + "/multiexon_isoform.concat.gpd"
+	call(cmd5mlt.split())
+	sys.stdout.write("\n## Step6: construct singleton isoform at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.flush()
+	cmd6 = udir + "/py_isoseqcon_construct_sgt.py -a " + tempdir + "/isoform_annotation.sort.gpd" + " -i " + tempdir + "/singleton_isoform.concat.gpd" + " -o " + tempdir + "/singleton_isoform.concat.constr.gpd"
+	call(cmd6.split())
+	sys.stdout.write("\n## Step7: construct multi-exon isoform at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.flush()
+	if args.short_read:
+		cmd7 = udir + "/py_isoseqcon_construct_mlt.py -a " + tempdir + "/isoform_annotation.sort.gpd" + " -s " + tempdir + "/short_read.gpd" + " -i " + tempdir + "/multiexon_isoform.concat.gpd" + " -o " + tempdir + "/multiexon_isoform.concat.constr.gpd"
+	else:
+		cmd7 = udir + "/py_isoseqcon_construct_mlt.py -a " + tempdir + "/isoform_annotation.sort.gpd" + " -i " + tempdir + "/multiexon_isoform.concat.gpd" + " -o " + tempdir + "/multiexon_isoform.concat.constr.gpd"
+	call(cmd7.split())
+	sys.stdout.write("\n## Step8: output constructed isoforms at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.flush()
+	cmd8 = udir + "/py_isoseqats_generate_output.py -i " + tempdir + "/singleton_isoform.concat.constr.gpd " + tempdir + "/multiexon_isoform.concat.constr.gpd" + " -o " + tempdir + "/constructed_isoforms.gpd" + " --sgt_k_fl " + args.sgt_k_fl + " --sgt_n_fl " + args.sgt_n_fl + " --sgt_k_lr " + args.sgt_k_lr + " --sgt_n_lr " + args.sgt_n_lr + " --mlt_k_fl " + args.mlt_k_fl + " --mlt_n_fl " + args.mlt_n_fl + " --mlt_k_lr " + args.mlt_k_lr + " --mlt_n_lr " + args.mlt_n_lr + " --mlt_n_ss " + args.mlt_n_ss + " --mlt_n_sub " + args.mlt_n_sub + " -g " + args.genome + " --up_len " + args.up_len + " --down_len " + args.down_len + " --max_a_pct " + args.max_a_pct + " --max_a_len " + args.max_a_len + " --last_exon " + tempdir + "/isoform_annotation_last_exon.sort.txt" + " --max_over_pct " + args.sgt_n_le
+	call(cmd8.split())
+	sys.stdout.write("\n## Step9: stat ATSS at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.flush()
+	if args.cage_bed:
+		cmd9 = udir + "/py_isoseqats_generate_ats_output.py -i " + tempdir + "/constructed_isoforms.gpd" + " -l " + tempdir + "/polished_long_read.gpd" + " -c " + args.cage_bed + " -o " + tempdir + "/constructed_isoforms.ats.gpd" + " -d " + args.tss_dis_group
+	else:
+		cmd9 = udir + "/py_isoseqats_generate_ats_output.py -i " + tempdir + "/constructed_isoforms.gpd" + " -l " + tempdir + "/polished_long_read.gpd" + " -o " + tempdir + "/constructed_isoforms.ats.gpd" + " -d " + args.tss_dis_group
+	call(cmd9.split())
+	sys.stdout.write("\n## Step10: output constructed isoforms with ATSS analysis at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.write("# Generate GPD\n")
+	sys.stdout.flush()
+	cmd10 = udir + "/py_isoseqats_stat_ats.py -i " + tempdir + "/constructed_isoforms.ats.gpd" + " -l " + args.tss_lr + " -c " + args.tss_cage + " -o " + args.output_gpd
+	call(cmd10.split())
+	sys.stdout.write("# Generate GTF\n")
+	sys.stdout.flush()
+	cmd10gtf = udir + "/py_isoseqats_gpd2gtf.py -i " + args.output_gpd + " -o " + args.output_gtf
+	call(cmd10gtf.split())
+	sys.stdout.write("\n### Finish IsoSeqATS running at: " + time.strftime("%a,%d %b %Y %H:%M:%S") + "\n")
+	sys.stdout.flush()
+
+def setup_tempdir(tempd):
+	if not os.path.exists(tempd):
+		os.makedirs(tempd.rstrip('/'))
+	return tempd.rstrip('/')
+
+def do_inputs():
+	parser=argparse.ArgumentParser(description="IsoSeqATS: construct gene isoforms using PacBio Iso-Seq data",formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+	parser.add_argument('-v','--version',action='version',version='IsoSeqATS (version 0.2)')
+	
+	group1 = parser.add_argument_group('Input options')
+	group1.add_argument('-g','--genome',type=str,required=True,help="Reference genome file (FASTA format)")
+	group1.add_argument('-a','--annotation',type=str,required=True,help="Gene annotation file (GTF format). Note: no duplicated transcript ID from different genic loci, see README for suggestion")
+	group1.add_argument('-l','--long_read',type=str,required=True,nargs="+",help="PacBio Iso-Seq long read alignment file(s) (SAM format; multiple sam files can be as inputs split by 'space'). Note: see README for how to generate this file")
+	group1.add_argument('-c','--primer_info',type=str,required=True,help="PacBio Iso-Seq long read primer information file (CSV format). Note: see README for how to generate this file")
+	group1.add_argument('-s','--short_read',type=str,nargs="+",help="Optional input: Second-Generation Sequencing (e.g., Illumina platform) short read alignment file(s) (SAM format; multiple sam files can be as inputs split by 'space'). Note: see README for how to generate this file")
+	group1.add_argument('--cage_bed',type=str,help="Optional input: CAGE data (BED format). Note: see README for how to obtain this file")
+
+	group2 = parser.add_argument_group('Output options')
+	group2.add_argument('--tempdir',type=str,required=True,help="Temporary directory for saving intermediate files (e.g., ./temp)")
+	group2.add_argument('--output_gpd',type=str,required=True,help="Constructed isoforms (modified GPD format). Note: see README for the format information")
+	group2.add_argument('--output_gtf',type=str,required=True,help="Constructed isoforms (GTF format). Note: see README for the format information")
+
+	group3 = parser.add_argument_group('PacBio Iso-Seq long read alignment quality control and correction options')
+	group3.add_argument('--mapq',type=str,default='0',help="Minimal MAPQ score for long read alignment [0,255]. Note: aligners (e.g., GMAP) give MAPping Quality score based on their own algorithm (shown in the MAPQ field of SAM file)")
+	group3.add_argument('--s5',type=str,default='20',help="Maximal length of soft-clipped sequence (bp) at 5'end of long read. Note: aligners (e.g., GMAP) usually soft-clip the end sequence of the read if they cannot be aligned to reference genome (shown by 'S' in the CIGAR string of SAM file)")
+	group3.add_argument('--s3',type=str,default='20',help="Maximal length of soft-clipped sequence (bp) at 3'end of long read. Note: aligners (e.g., GMAP) usually soft-clip the end sequence of the read if they cannot be aligned to reference genome (shown by 'S' in the CIGAR string of SAM file)")
+	group3.add_argument('--st',type=str,default='5',help="For the correction of spliced long read alignment, if the distance (bp) between the splice site detected by long read and the splice sites annotated by annotation library or detected by short read alignment (when short read data is provided) is <= the set, correct it to be the nearest one annotated-by-annotation-library/detected-by-short-read")
+
+	group4 = parser.add_argument_group('Singleton isoform construction options')
+	group4.add_argument('--sgt_pct',type=str,default='0.8',help="Merge two isoforms and/or long reads together if they are from same genomic strand and the overlap percentage is higher than the set [0.0~1.0]")
+	group4.add_argument('--sgt_k_fl',type=str,default='1',help="For known singleton isoform construction, minimal count requirement of full-length long reads")
+	group4.add_argument('--sgt_k_lr',type=str,default='1',help="For known singleton isoform construction, minimal count requirement of total long reads (both full-length and non-full-length)")
+	group4.add_argument('--sgt_n_fl',type=str,default='5',help="For novel singleton isoform construction, minimal count requirement of full-length long reads")
+	group4.add_argument('--sgt_n_lr',type=str,default='5',help="For novel singleton isoform construction, minimal count requirement of total long reads (both full-length and non-full-length)")
+	group4.add_argument('--sgt_n_le',type=str,default='0.5',help="For novel singleton isoform construction, exclude it if the percentage of its sequence that is overlapped with the last exon of any known isoform is > the set [0.0~1.0]. Note: this parameter is to filter those potentially-fake isoforms with 5'end truncation")
+
+	group5 = parser.add_argument_group('Multi-exon isoform construction options')
+	group5.add_argument('--mlt_k_fl',type=str,default='1',help="For known multi-exon isoform construction, minimal count requirement of full-length long reads")
+	group5.add_argument('--mlt_k_lr',type=str,default='1',help="For known multi-exon isoform construction, minimal count requirement of total long reads (both full-length and non-full-length)")
+	group5.add_argument('--mlt_n_fl',type=str,default='5',help="For novel multi-exon isoform construction, minimal count requirement of full-length long reads")
+	group5.add_argument('--mlt_n_lr',type=str,default='5',help="For novel multi-exon isoform construction, minimal count requirement of total long reads (both full-length and non-full-length)")
+	group5.add_argument('--mlt_n_ss',type=str,default='1.0',help="For novel multi-exon isoform construction, exclude it if the percentage of its splice sites that are not annotated-by-annotation-library or detected-by-short-read is < the set [0.0~1.0]. Note: suggest 0.0 if trying to find novel isoforms at novel genic loci; suggest >0.0 if short read alignment data is provided")
+	group5.add_argument('--mlt_n_sub',type=str,default="yes",choices=["yes","no"],help="For novel multi-exon isoform construction, exclude it if it is the subset of any known isoform (based on the splice junction combination information of multi-exon isoform). Note: this parameter is to filter those potentially-fake isoforms with 5'end and/or 3'end truncations")
+
+	group6 = parser.add_argument_group('PolyA track detection (for novel isoform) options')
+	group6.add_argument('--up_len',type=str,default='5',help="Upstream length of the transcription end site for defined region (bp)")
+	group6.add_argument('--down_len',type=str,default='20',help="Downstream length of the transcription end site for defined region (bp)")
+	group6.add_argument('--max_a_pct',type=str,default='0.5',help="Exclude the novel isoform if the percentage of nucleotide A in its defined region is > the set [0.0~1.0]. Note: the initiation of reverse transcription process during full-length cDNA library preparation mainly relies on the polyA tail at 3'end of polyA(+) RNA (see Clontech SMART-Seq2 technology). This parameter is to filter those fake full-length isoforms casued by polyA sequence at the internal region of genuine full-length isoforms")
+	group6.add_argument('--max_a_len',type=str,default='8',help="Exclude the novel isoform if the length of polyA track in its defined region is > the set (bp). Note: the initiation of reverse transcription process during full-length cDNA library preparation mainly relies on the polyA tail at 3'end of polyA(+) RNA (see Clontech SMART-Seq2 technology). This parameter is to filter those fake full-length isoforms casued by polyA sequence at the internal region of genuine full-length isoforms")
+	group7 = parser.add_argument_group('ATS analysis options')    
+	group7.add_argument('--tss_dis_group',type=str,default='50',help="If the distance between two TSSs is <= the set, group them together (bp)")
+	group7.add_argument('--tss_lr',type=str,default='1',help="Minimal number of supporting short reads for identfied TSS")
+	group7.add_argument('--tss_cage',type=str,default='0',choices=['0','1'],help="If require the support of CAGE data for identified TSS ('0' for 'No', '1' for 'Yes')")
+
+	group8 = parser.add_argument_group('Other options')
+	group8.add_argument('--cpu',type=str,default=cpu_count(),help="Number of threads to run IsoSeqATS")
+
+	args = parser.parse_args()
+	return args
+
+if __name__=="__main__":
+	main()
+
